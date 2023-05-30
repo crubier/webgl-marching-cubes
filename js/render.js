@@ -1,4 +1,4 @@
-import init, {MarchingCubes} from "../pkg/marching_cubes.js";
+// import init, {MarchingCubes} from "../pkg/marching_cubes.js";
 
 var cubeStrip = [
 	1, 1, 0,
@@ -29,6 +29,7 @@ var volDims = null;
 var volScale = null;
 var colormapTex = null;
 var volumeData = null;
+var quantifiedVolumeData = null;
 
 var isovalue = null;
 var showVolume = null;
@@ -65,15 +66,15 @@ const center = vec3.set(vec3.create(), 0.5, 0.5, 0.5);
 const up = vec3.set(vec3.create(), 0.0, 1.0, 0.0);
 
 var volumes = {
-	"Fuel": "fuel_64x64x64_uint8.raw",
-	"Neghip": "neghip_64x64x64_uint8.raw",
-	"Hydrogen Atom": "hydrogen_atom_128x128x128_uint8.raw",
-	"Boston Teapot": "boston_teapot_256x256x178_uint8.raw",
-	"Engine": "engine_256x256x128_uint8.raw",
-	"Bonsai": "bonsai_256x256x256_uint8.raw",
-	"Foot": "foot_256x256x256_uint8.raw",
-	"Skull": "skull_256x256x256_uint8.raw",
-	"Aneurysm": "aneurism_256x256x256_uint8.raw",
+	"Fuel": "volumes/fuel_64x64x64_uint8.raw",
+	"Neghip": "volumes/neghip_64x64x64_uint8.raw",
+	"Hydrogen Atom": "volumes/hydrogen_atom_128x128x128_uint8.raw",
+	"Boston Teapot": "volumes/boston_teapot_256x256x178_uint8.raw",
+	"Engine": "volumes/engine_256x256x128_uint8.raw",
+	"Bonsai": "volumes/bonsai_256x256x256_uint8.raw",
+	"Foot": "volumes/foot_256x256x256_uint8.raw",
+	"Skull": "volumes/skull_256x256x256_uint8.raw",
+	"Aneurysm": "volumes/aneurism_256x256x256_uint8.raw",
 };
 
 var colormaps = {
@@ -85,15 +86,12 @@ var colormaps = {
 	"Samsel Linear YGB 1211G": "colormaps/samsel-linear-ygb-1211g.png",
 };
 
-var loadVolume = function(selection, onload) {
-    var file = volumes[selection];
+var loadVolume = function (selection, onload) {
+	var file = volumes[selection];
 	var m = file.match(fileRegex);
 	var volDims = [parseInt(m[2]), parseInt(m[3]), parseInt(m[4])];
-	
-    var url = file;
-    if (!selection.startsWith("local")) {
-        var url = "https://cdn.willusher.io/demo-volumes/" + file;
-    }
+
+	var url = file;
 	var req = new XMLHttpRequest();
 	var loadingProgressText = document.getElementById("loadingText");
 	var loadingProgressBar = document.getElementById("loadingProgressBar");
@@ -103,23 +101,23 @@ var loadVolume = function(selection, onload) {
 
 	req.open("GET", url, true);
 	req.responseType = "arraybuffer";
-	req.onprogress = function(evt) {
+	req.onprogress = function (evt) {
 		var vol_size = volDims[0] * volDims[1] * volDims[2];
 		var percent = evt.loaded / vol_size * 100;
 		loadingProgressBar.setAttribute("style", "width: " + percent.toFixed(2) + "%");
 	};
-	req.onerror = function(evt) {
+	req.onerror = function (evt) {
 		loadingProgressText.innerHTML = "Error Loading Volume";
 		loadingProgressBar.setAttribute("style", "width: 0%");
 	};
-	req.onload = function(evt) {
+	req.onload = function (evt) {
 		loadingProgressText.innerHTML = "Loaded Volume";
 		loadingProgressBar.setAttribute("style", "width: 100%");
 		var respBuf = req.response;
 		if (respBuf) {
-            // TODO: We then need to copy the buffer into webasm memory space,
-            // and use that buffer for the rest of the code, instead of copying it
-            // in/out every call
+			// TODO: We then need to copy the buffer into webasm memory space,
+			// and use that buffer for the rest of the code, instead of copying it
+			// in/out every call
 			var dataBuffer = new Uint8Array(respBuf);
 			onload(file, dataBuffer);
 		} else {
@@ -130,7 +128,47 @@ var loadVolume = function(selection, onload) {
 	req.send();
 }
 
-var renderLoop = function() {
+var toReadableStream = function (value) {
+	return new ReadableStream({
+		start(controller) {
+			controller.enqueue(value);
+			controller.close();
+		},
+	});
+}
+
+async function fromReadableStream(readableStream) {
+	const reader = readableStream.getReader();
+	const chunks = [];
+
+	while (true) {
+		const { done, value } = await reader.read();
+
+		if (done) {
+			break;
+		}
+
+		chunks.push(value);
+	}
+
+	const concatenatedChunks = new Uint8Array(
+		chunks.reduce((acc, chunk) => acc + chunk.length, 0)
+	);
+
+	let offset = 0;
+	for (const chunk of chunks) {
+		concatenatedChunks.set(chunk, offset);
+		offset += chunk.length;
+	}
+
+	return concatenatedChunks;
+}
+
+
+
+
+
+var renderLoop = function () {
 	// Save them some battery if they're not viewing the tab
 	if (document.hidden) {
 		return;
@@ -156,22 +194,37 @@ var renderLoop = function() {
 	if (currentIsovalue != isovalue.value || newVolumeUpload) {
 		currentIsovalue = isovalue.value;
 
-        var triangles;
-        var computeTime;
-        if (useWebASM.checked) {
-            var t0 = performance.now();
-            triangles = marchingCubes.marching_cubes(parseFloat(currentIsovalue / 255.0));
-            var t1 = performance.now();
-            computeTime = t1 - t0;
-        } else {
-            var t0 = performance.now();
-            triangles = marchingCubesJS(volumeData, volDims, currentIsovalue / 255.0);
-            var t1 = performance.now();
-            computeTime = t1 - t0;
-        }
-		isosurfaceNumVerts = triangles.length / 3;
-        isosurfaceInfo.innerHTML = `Isosurface at ${currentIsovalue} contains ${isosurfaceNumVerts / 3} ` +
-            `triangles, computed in ${computeTime}ms`;
+		var triangles;
+		var computeTime;
+		if (useWebASM.checked) {
+			var t0 = performance.now();
+			triangles = marchingCubes.marching_cubes(parseFloat(currentIsovalue / 255.0));
+			var t1 = performance.now();
+			computeTime = t1 - t0;
+		} else {
+			var t0 = performance.now();
+			triangles = marchingCubesJS(volumeData, volDims, currentIsovalue / 255.0);
+			quantifiedVolumeData = compress(volumeData, quantifiedVolumeData, volDims, currentIsovalue);
+			const uncompressedStream = toReadableStream(quantifiedVolumeData);
+			const compressedStream = uncompressedStream.pipeThrough(new CompressionStream("gzip"));
+			fromReadableStream(compressedStream).then((compressedData) => {
+				const compressedVolumeData = compressedData;
+
+				var t1 = performance.now();
+				computeTime = t1 - t0;
+
+				isosurfaceNumVerts = triangles.length / 3;
+				const volumeDataSize = volumeData.length;
+				const quantifiedVolumeDataSize = quantifiedVolumeData.length;
+				const compressedVolumeDataSize = compressedVolumeData.length;
+				isosurfaceInfo.innerHTML = `Isosurface at ${currentIsovalue} contains ${isosurfaceNumVerts / 3} ` +
+					`triangles, computed in ${computeTime}ms.  volumeDataSize = ${volumeDataSize},  quantifiedVolumeDataSize = ${quantifiedVolumeDataSize},  compressedVolumeDataSize = ${compressedVolumeDataSize}`;
+
+			});
+
+
+
+		}
 
 		gl.bindBuffer(gl.ARRAY_BUFFER, surfaceVbo);
 		gl.bufferData(gl.ARRAY_BUFFER, triangles, gl.DYNAMIC_DRAW);
@@ -239,11 +292,11 @@ var renderLoop = function() {
 	startTime = endTime;
 }
 
-var selectVolume = function() {
+var selectVolume = function () {
 	var selection = document.getElementById("volumeList").value;
 	history.replaceState(history.state, "#" + selection, "#" + selection);
 
-	loadVolume(selection, function(file, dataBuffer) {
+	loadVolume(selection, function (file, dataBuffer) {
 		var m = file.match(fileRegex);
 		volDims = [parseInt(m[2]), parseInt(m[3]), parseInt(m[4])];
 
@@ -262,11 +315,12 @@ var selectVolume = function() {
 
 		var longestAxis = Math.max(volDims[0], Math.max(volDims[1], volDims[2]));
 		volScale = [volDims[0] / longestAxis, volDims[1] / longestAxis,
-			volDims[2] / longestAxis];
+		volDims[2] / longestAxis];
 
-        marchingCubes.set_volume(dataBuffer, volDims[0], volDims[1], volDims[2]);
+		// marchingCubes.set_volume(dataBuffer, volDims[0], volDims[1], volDims[2]);
 
 		volumeData = dataBuffer;
+		quantifiedVolumeData = new Uint8Array(dataBuffer)
 		newVolumeUpload = true;
 		if (!volumeTexture) {
 			volumeTexture = tex;
@@ -278,10 +332,10 @@ var selectVolume = function() {
 	});
 }
 
-var selectColormap = function() {
+var selectColormap = function () {
 	var selection = document.getElementById("colormapList").value;
 	var colormapImage = new Image();
-	colormapImage.onload = function() {
+	colormapImage.onload = function () {
 		gl.activeTexture(gl.TEXTURE1);
 		gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 180, 1,
 			gl.RGBA, gl.UNSIGNED_BYTE, colormapImage);
@@ -289,18 +343,18 @@ var selectColormap = function() {
 	colormapImage.src = colormaps[selection];
 }
 
-var run = function(){
+var run = function () {
 	fillVolumeSelector();
 	fillcolormapSelector();
 
 	isovalue = document.getElementById("isovalue");
 	showVolume = document.getElementById("showVolume");
-	showVolume.checked = true;
+	showVolume.checked = false;
 
 	useWebASM = document.getElementById("useWebASM");
-	useWebASM.checked = true;
+	useWebASM.checked = false;
 
-    isosurfaceInfo = document.getElementById("isosurfaceInfo");
+	isosurfaceInfo = document.getElementById("isosurfaceInfo");
 
 	canvas = document.getElementById("glcanvas");
 	gl = canvas.getContext("webgl2");
@@ -321,7 +375,7 @@ var run = function(){
 
 	// Register mouse and touch listeners
 	var controller = new Controller();
-	controller.mousemove = function(prev, cur, evt) {
+	controller.mousemove = function (prev, cur, evt) {
 		if (evt.buttons == 1) {
 			camera.rotate(prev, cur);
 
@@ -329,9 +383,9 @@ var run = function(){
 			camera.pan([cur[0] - prev[0], prev[1] - cur[1]]);
 		}
 	};
-	controller.wheel = function(amt) { camera.zoom(amt); };
+	controller.wheel = function (amt) { camera.zoom(amt); };
 	controller.pinch = controller.wheel;
-	controller.twoFingerDrag = function(drag) { camera.pan(drag); };
+	controller.twoFingerDrag = function (drag) { camera.pan(drag); };
 
 	controller.registerForCanvas(canvas);
 
@@ -423,7 +477,7 @@ var run = function(){
 	// Load the default colormap and upload it, after which we
 	// load the default volume.
 	var colormapImage = new Image();
-	colormapImage.onload = function() {
+	colormapImage.onload = function () {
 		var colormap = gl.createTexture();
 		gl.activeTexture(gl.TEXTURE1);
 		gl.bindTexture(gl.TEXTURE_2D, colormap);
@@ -440,7 +494,7 @@ var run = function(){
 	colormapImage.src = "colormaps/cool-warm-paraview.png";
 }
 
-var fillVolumeSelector = function() {
+var fillVolumeSelector = function () {
 	var selector = document.getElementById("volumeList");
 	for (var v in volumes) {
 		var opt = document.createElement("option");
@@ -448,10 +502,10 @@ var fillVolumeSelector = function() {
 		opt.innerHTML = v;
 		selector.appendChild(opt);
 	}
-    selector.addEventListener("change", selectVolume);
+	selector.addEventListener("change", selectVolume);
 }
 
-var fillcolormapSelector = function() {
+var fillcolormapSelector = function () {
 	var selector = document.getElementById("colormapList");
 	for (var p in colormaps) {
 		var opt = document.createElement("option");
@@ -459,13 +513,11 @@ var fillcolormapSelector = function() {
 		opt.innerHTML = p;
 		selector.appendChild(opt);
 	}
-    selector.addEventListener("change", selectColormap);
+	selector.addEventListener("change", selectColormap);
 }
 
-window.onload = function() {
-    init("pkg/marching_cubes_bg.wasm").then(() => {
-        marchingCubes = MarchingCubes.new();
-        run();
-    });
+window.onload = function () {
+	marchingCubes = marchingCubesJS;
+	run();
 }
 
