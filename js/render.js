@@ -218,7 +218,7 @@ var renderLoop = function () {
 				const quantifiedVolumeDataSize = quantifiedVolumeData.length;
 				const compressedVolumeDataSize = compressedVolumeData.length;
 				isosurfaceInfo.innerHTML = `Isosurface at ${currentIsovalue} contains ${isosurfaceNumVerts / 3} ` +
-					`triangles, computed in ${computeTime}ms.  volumeDataSize = ${volumeDataSize},  quantifiedVolumeDataSize = ${quantifiedVolumeDataSize},  compressedVolumeDataSize = ${compressedVolumeDataSize}`;
+					`triangles, computed in ${computeTime}ms. <br/>volumeDataSize = ${volumeDataSize},  <br/>compressedVolumeDataSize = ${compressedVolumeDataSize}`;
 
 			});
 
